@@ -124,7 +124,8 @@ DWORD64 GetReturnValue(HANDLE hThread, Gadgets gadgets) {
 }
 
 DWORD WINAPI ThreadFunc(LPVOID lpParam) {
-    while (1) {
+    int count = 0;
+    while (count++ < 10) {
         Sleep(100);
     }
     return 0;
@@ -211,10 +212,7 @@ int main(void) {
         return 1;
     }
 
-    //const UINT32 HeapAllocSize = 0x2000;
-
     // Set RIP to a `jmp $`, blocks when kernel exit
-
     CONTEXT ctx = { .ContextFlags = CONTEXT_FULL };
     
     SuspendThread(hThread);
