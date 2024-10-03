@@ -242,11 +242,18 @@ int main(void) {
         return 1;
     }
 
-    DWORD64 fnVirtualAlloc = (DWORD64)GetProcAddress(GetModuleHandleA("kernelbase.dll"), "VirtualAlloc");
-    DWORD64 fnCreateFileA  = (DWORD64)GetProcAddress(GetModuleHandleA("kernel32.dll"),   "CreateFileA");
-    DWORD64 fnCreateThread = (DWORD64)GetProcAddress(GetModuleHandleA("kernel32.dll"),   "CreateThread");
-    DWORD64 fnCloseHandle  = (DWORD64)GetProcAddress(GetModuleHandleA("kernel32.dll"),   "CloseHandle");
-    DWORD64 fnReadFile     = (DWORD64)GetProcAddress(GetModuleHandleA("kernel32.dll"),   "ReadFile");
+    HMODULE kernelbase = GetModuleHandleA("kernelbase.dll");
+    HMODULE kernel32   = GetModuleHandleA("kernel32.dll");
+    if (kernelbase == NULL || kernel32 == NULL) {
+        printf("[!] Required DLLs for Win32 APIs could not be loaded\n");
+        return 1;
+    }
+
+    DWORD64 fnVirtualAlloc = (DWORD64)GetProcAddress(kernelbase, "VirtualAlloc");
+    DWORD64 fnCreateFileA  = (DWORD64)GetProcAddress(kernel32,   "CreateFileA");
+    DWORD64 fnCreateThread = (DWORD64)GetProcAddress(kernel32,   "CreateThread");
+    DWORD64 fnCloseHandle  = (DWORD64)GetProcAddress(kernel32,   "CloseHandle");
+    DWORD64 fnReadFile     = (DWORD64)GetProcAddress(kernel32,   "ReadFile");
 
     DWORD64 namptr = 0;
     for (int j = ArraySize(pipename); j > 0; j -= 8) {
