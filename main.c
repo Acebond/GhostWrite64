@@ -188,11 +188,16 @@ HANDLE GetTestThreadHandle(void) {
 }
 
 HANDLE GetRealThreadHandle(void) {
+
+    // Find this value in System Informer, PrivescCheck, etc
+    // See: https://gist.github.com/Acebond/61792987cd9cdac9c6a62c7d906f5e1f for how to automatically find the vulnerable handle
     HANDLE hThread = (HANDLE)0x114;
     return hThread;
 }
 
 HANDLE OpenProcessDuplicateHandle(void) {
+
+    // Find these values in System Informer, PrivescCheck, etc
     DWORD  dwTargetProcessId = 10852;
     HANDLE hTargetHandle     = (HANDLE)0x118;
 
